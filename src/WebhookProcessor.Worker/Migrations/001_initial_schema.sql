@@ -9,9 +9,10 @@ CREATE TABLE payments (
 );
 
 -- One row per event ever applied. The primary key is what makes processing idempotent.
+-- The foreign key is checked at commit because the event is inserted before the payment.
 CREATE TABLE processed_events (
     event_id     text        PRIMARY KEY,
-    payment_id   text        NOT NULL REFERENCES payments (payment_id),
+    payment_id   text        NOT NULL REFERENCES payments (payment_id) DEFERRABLE INITIALLY DEFERRED,
     event_type   text        NOT NULL,
     amount       bigint      NOT NULL,
     currency     char(3)     NOT NULL,
