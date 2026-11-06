@@ -38,6 +38,8 @@ public sealed class QueueConsumer : IHostedService, IAsyncDisposable
         _processor.ProcessErrorAsync += HandleErrorAsync;
     }
 
+    public bool IsProcessing => _processor.IsProcessing;
+
     public Task StartAsync(CancellationToken cancellationToken) => _processor.StartProcessingAsync(cancellationToken);
 
     public Task StopAsync(CancellationToken cancellationToken) => _processor.StopProcessingAsync(cancellationToken);

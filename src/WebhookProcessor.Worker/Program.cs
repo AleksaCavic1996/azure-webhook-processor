@@ -1,8 +1,17 @@
 using Azure.Messaging.ServiceBus;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Npgsql;
 using WebhookProcessor.Worker;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.UseUtcTimestamp = true;
+    options.TimestampFormat = "O";
+});
 
 var postgres = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured.");
@@ -16,11 +25,18 @@ builder.Services.AddSingleton<EventProcessor>();
 builder.Services.AddSingleton<QueueConsumer>();
 builder.Services.AddHostedService(services => services.GetRequiredService<QueueConsumer>());
 
-var host = builder.Build();
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"], timeout: TimeSpan.FromSeconds(3))
+    .AddCheck<QueueConsumerHealthCheck>("queue-consumer", tags: ["ready"]);
+
+var app = builder.Build();
 
 if (builder.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
 {
-    DatabaseMigrator.Migrate(postgres, host.Services.GetRequiredService<ILogger<Program>>());
+    DatabaseMigrator.Migrate(postgres, app.Services.GetRequiredService<ILogger<Program>>());
 }
 
-host.Run();
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
+
+app.Run();
