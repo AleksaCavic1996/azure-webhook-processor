@@ -5,7 +5,7 @@
 An idempotent payment webhook processor built with .NET and Azure Service Bus.
 The same event delivered several times changes state only once.
 
-**Status:** work in progress. The core service runs locally against the Service Bus emulator. Automated tests, CI and the Azure deployment are not done yet.
+**Status:** work in progress. The service runs locally and in containers against the Service Bus emulator, with automated tests and CI. The Azure deployment is not done yet.
 
 ## Design
 
@@ -77,3 +77,47 @@ Requires the .NET 10 SDK and Docker Desktop.
 Both the API and the worker expose `/health/live` (the process is running) and `/health/ready` (its dependencies are available).
 
 The emulator does not persist messages or entities across container restarts. The queue is recreated from `servicebus-config.json` on startup.
+
+## Tests
+
+Requires Docker for everything except the unit and API tests.
+
+```
+dotnet test
+```
+
+| Group | What it proves | Needs |
+| --- | --- | --- |
+| `Unit` | HMAC signature (checked against a value computed with openssl), replay window, payload validation | nothing |
+| `Api` | Status codes 202, 400, 401 and 503, and that the exact signed bytes reach the queue. The broker is replaced by a recording fake. | nothing |
+| `Integration` | Idempotency against real PostgreSQL: the same event three times, ten parallel deliveries of one event, redelivery after a crash before the message is completed, order-independent status, rollback on a currency mismatch | Docker (Testcontainers) |
+| `EndToEnd` | Signed HTTP request to database row through the Service Bus emulator, ten parallel posts, a poison message dead-lettered without blocking the queue | Docker, about 1 minute to start the emulator |
+
+Skip the slow end-to-end group:
+
+```
+dotnet test -- --filter-not-trait "Category=EndToEnd"
+```
+
+The end-to-end tests start the Service Bus emulator, which means accepting its license terms (linked in `.env.example`).
+
+## Containers
+
+Both services have a multi-stage Dockerfile. They build with the .NET SDK version from `global.json` and run on the chiseled ASP.NET image, which has no shell or package manager and runs as a non-root user.
+
+Run the whole system in containers (set `WEBHOOK_SIGNING_SECRET` in `.env` first):
+
+```powershell
+docker compose --profile app up -d --build
+./scripts/send-test-event.ps1 -EventId evt-1 -PaymentId pay-1 -FromEnvFile
+```
+
+The API container listens on `http://localhost:8080` and the worker's health endpoints on `http://localhost:8081`.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+1. Release build with warnings treated as errors, then the unit, API and integration tests.
+2. In parallel, the end-to-end tests against the Service Bus emulator.
+3. After both pass, the `api` and `worker` images are built. On `main` they are pushed to GitHub Container Registry as `ghcr.io/aleksacavic1996/webhook-processor-api` and `-worker`, tagged with the commit SHA and `latest`. The push uses the workflow token, so no credentials are stored.
