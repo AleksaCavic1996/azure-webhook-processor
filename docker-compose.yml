@@ -46,5 +46,39 @@ services:
       mssql:
         condition: service_healthy
 
+  # The application itself, built from the Dockerfiles. Started only on request:
+  #   docker compose --profile app up -d --build
+  api:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: src/WebhookProcessor.Api/Dockerfile
+    image: webhook-processor-api:local
+    environment:
+      ConnectionStrings__ServiceBus: "Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
+      Webhook__SigningSecret: ${WEBHOOK_SIGNING_SECRET:?set WEBHOOK_SIGNING_SECRET in .env}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - servicebus
+
+  worker:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: src/WebhookProcessor.Worker/Dockerfile
+    image: webhook-processor-worker:local
+    environment:
+      ConnectionStrings__ServiceBus: "Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=webhooks;Username=webhooks;Password=${POSTGRES_PASSWORD}"
+      Database__MigrateOnStartup: "true"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      servicebus:
+        condition: service_started
+
 volumes:
   postgres-data:

@@ -1,0 +1,16 @@
+# Keep the build context small and free of secrets. Only src/ and global.json are needed.
+**/bin/
+**/obj/
+.git/
+.github/
+.vs/
+.vscode/
+tests/
+infra/
+scripts/
+*.md
+.env
+.env.*
+docker-compose*.yml
+servicebus-config.json
+TestResults/

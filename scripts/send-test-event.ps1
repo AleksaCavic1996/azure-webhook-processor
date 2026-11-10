@@ -2,6 +2,9 @@
 #
 # Example:
 #   ./scripts/send-test-event.ps1 -EventId evt-1 -PaymentId pay-1 -Type payment.captured -Amount 1500
+#
+# Against the API container (docker compose --profile app), signed with the secret from .env:
+#   ./scripts/send-test-event.ps1 -EventId evt-1 -PaymentId pay-1 -FromEnvFile
 
 param(
     [Parameter(Mandatory)] [string] $EventId,
@@ -10,17 +13,29 @@ param(
     [string] $Type = 'payment.captured',
     [long] $Amount = 1500,
     [string] $Currency = 'EUR',
-    [string] $Url = 'http://localhost:5271/webhooks/payments',
+    [string] $Url,
     # Overrides the signature, to test rejection.
-    [string] $Signature
+    [string] $Signature,
+    # Sign with WEBHOOK_SIGNING_SECRET from .env and default to the container port 8080.
+    [switch] $FromEnvFile
 )
 
 $ErrorActionPreference = 'Stop'
-$apiProject = Join-Path $PSScriptRoot '..\src\WebhookProcessor.Api'
 
-$secretLine = dotnet user-secrets list --project $apiProject | Where-Object { $_ -like 'Webhook:SigningSecret = *' }
-if (-not $secretLine) { throw 'Webhook:SigningSecret is not set in user secrets.' }
-$secret = $secretLine -replace '^Webhook:SigningSecret = ', ''
+if ($FromEnvFile) {
+    $envFile = Join-Path $PSScriptRoot '..\.env'
+    $secretLine = Get-Content $envFile | Where-Object { $_ -like 'WEBHOOK_SIGNING_SECRET=*' }
+    if (-not $secretLine) { throw 'WEBHOOK_SIGNING_SECRET is not set in .env.' }
+    $secret = $secretLine -replace '^WEBHOOK_SIGNING_SECRET=', ''
+    if (-not $Url) { $Url = 'http://localhost:8080/webhooks/payments' }
+}
+else {
+    $apiProject = Join-Path $PSScriptRoot '..\src\WebhookProcessor.Api'
+    $secretLine = dotnet user-secrets list --project $apiProject | Where-Object { $_ -like 'Webhook:SigningSecret = *' }
+    if (-not $secretLine) { throw 'Webhook:SigningSecret is not set in user secrets.' }
+    $secret = $secretLine -replace '^Webhook:SigningSecret = ', ''
+    if (-not $Url) { $Url = 'http://localhost:5271/webhooks/payments' }
+}
 
 $body = @{
     eventId    = $EventId
