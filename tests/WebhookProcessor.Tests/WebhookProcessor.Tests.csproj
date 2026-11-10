@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageReference Include="Testcontainers.ServiceBus" Version="4.16.0" />
     <PackageReference Include="xunit.v3" Version="4.0.3" />
   </ItemGroup>
 
@@ -24,6 +25,11 @@
     <ProjectReference Include="..\..\src\WebhookProcessor.Api\WebhookProcessor.Api.csproj" />
     <ProjectReference Include="..\..\src\WebhookProcessor.Core\WebhookProcessor.Core.csproj" />
     <ProjectReference Include="..\..\src\WebhookProcessor.Worker\WebhookProcessor.Worker.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The end-to-end tests start the emulator with the same queue definition as docker-compose. -->
+    <None Include="..\..\servicebus-config.json" Link="servicebus-config.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
