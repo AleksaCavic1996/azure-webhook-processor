@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the running workflow pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    name: Build, unit and integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # The cache key changes whenever a package version changes in any project.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore
+
+      # Warnings fail the build, so they cannot pile up unnoticed.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release -warnaserror
+
+      # The integration tests start PostgreSQL with Testcontainers, using the runner's Docker.
+      - name: Test
+        run: >
+          dotnet test --no-build --configuration Release --results-directory TestResults
+          -- --filter-not-trait "Category=EndToEnd" --report-xunit-trx
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+
+  end-to-end:
+    name: End-to-end tests (Service Bus emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # Starts the Service Bus emulator, its SQL Server and PostgreSQL. Running it accepts the
+      # emulator license terms, see .env.example for the links.
+      - name: Test
+        run: >
+          dotnet test --configuration Release --results-directory TestResults
+          -- --filter-trait "Category=EndToEnd" --report-xunit-trx
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: end-to-end-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore

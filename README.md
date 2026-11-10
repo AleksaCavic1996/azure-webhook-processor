@@ -1,5 +1,7 @@
 # Azure Webhook Processor
 
+[![CI](https://github.com/AleksaCavic1996/azure-webhook-processor/actions/workflows/ci.yml/badge.svg)](https://github.com/AleksaCavic1996/azure-webhook-processor/actions/workflows/ci.yml)
+
 An idempotent payment webhook processor built with .NET and Azure Service Bus.
 The same event delivered several times changes state only once.
 
