@@ -5,33 +5,39 @@
 An idempotent payment webhook processor built with .NET and Azure Service Bus.
 The same event delivered several times changes state only once.
 
-It runs on Azure Container Apps with Azure Service Bus, PostgreSQL Flexible Server and Key Vault. The infrastructure is defined in Bicep, and every push to `main` is tested and deployed by GitHub Actions through OIDC, with no stored credentials.
+It runs on Azure Container Apps with Azure Service Bus, PostgreSQL Flexible Server and Key Vault. The infrastructure is defined in Bicep, and every push to `main` is tested and deployed by GitHub Actions through OIDC.
+
+There are no passwords or access keys anywhere in the system. The services sign in to Service Bus and PostgreSQL with managed identities, the database has no public endpoint, and the pipeline holds no credentials. The one remaining secret is the HMAC key shared with the webhook provider, kept in Key Vault.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     provider([Payment provider]) -- "signed POST" --> api
+    github([GitHub Actions]) -- "OIDC, new image" --> apps
 
     subgraph azure [Azure resource group]
-        api["API<br/>Container App, public HTTPS"]
         queue[["Service Bus queue<br/>payment-events + dead-letter"]]
-        worker["Worker<br/>Container App, no ingress"]
-        db[("PostgreSQL<br/>payments, processed_events")]
-        vault["Key Vault"]
-        insights["Application Insights"]
+        vault["Key Vault<br/>signing secret"]
+        insights["Application Insights<br/>traces, alerts"]
 
-        api -- "send" --> queue
-        queue -- "receive" --> worker
-        worker -- "one transaction" --> db
-        vault -. "secrets via managed identity" .-> api
-        vault -. "secrets via managed identity" .-> worker
+        subgraph vnet [Virtual network]
+            subgraph apps [Container Apps subnet]
+                api["API<br/>public HTTPS"]
+                worker["Worker<br/>no ingress"]
+            end
+            subgraph dbnet [PostgreSQL subnet]
+                db[("PostgreSQL<br/>no public endpoint")]
+            end
+        end
+
+        api -- "send (identity)" --> queue
+        queue -- "receive (identity)" --> worker
+        worker -- "one transaction (identity)" --> db
+        vault -. "secret via identity" .-> api
         api -. "OpenTelemetry" .-> insights
         worker -. "OpenTelemetry" .-> insights
     end
-
-    github([GitHub Actions]) -- "OIDC, new image" --> api
-    github -- "OIDC, new image" --> worker
 ```
 
 ## Design
@@ -41,7 +47,7 @@ flowchart LR
 3. Delivery is at-least-once, and the effect is applied once per `eventId`. `INSERT ... ON CONFLICT DO NOTHING` on `processed_events` detects duplicates, including concurrent ones.
 4. A failed delivery is retried after 2, 4, 8 and 16 seconds, and goes to the dead-letter queue after the fifth attempt. A message that can never succeed goes there immediately.
 
-Known limitation: the retries span about 30 seconds of pauses, so a longer database outage moves messages to the dead-letter queue. They are not lost, and resending them is safe because processing is idempotent. Resending is a manual step for now.
+Known limitation: the retries span about 30 seconds of pauses, so a longer database outage moves messages to the dead-letter queue. They are not lost: an alert reports them, and `tools/DeadLetterReplay` moves them back to the queue once the cause is fixed (see [Operations](#operations)). Replaying is safe because processing is idempotent.
 
 ## Repository layout
 
@@ -51,6 +57,7 @@ Known limitation: the retries span about 30 seconds of pauses, so a longer datab
 | `src/WebhookProcessor.Worker` | Queue consumer |
 | `src/WebhookProcessor.Core` | Shared contracts |
 | `tests/WebhookProcessor.Tests` | Tests |
+| `tools/DeadLetterReplay` | Operator tool that replays dead-lettered messages |
 | `infra/` | Infrastructure as code |
 | `.github/workflows/` | CI/CD pipelines |
 | `scripts/` | Local helper scripts |
@@ -107,7 +114,13 @@ The emulator does not persist messages or entities across container restarts. Th
 
 ## Tests
 
-Requires Docker. The unit and API tests need no container themselves, but the test assembly starts one PostgreSQL container for the whole run, so without Docker every test fails at startup.
+Requires Docker for the integration and end-to-end tests. The unit and API tests run without it:
+
+```
+dotnet test -- --filter-namespace "WebhookProcessor.Tests.Unit" --filter-namespace "WebhookProcessor.Tests.Api"
+```
+
+The whole suite:
 
 ```
 dotnet test
@@ -156,19 +169,23 @@ Everything lives in one resource group and is created from `infra/main.bicep`.
 
 | Resource | Role | Notes |
 | --- | --- | --- |
-| Container Apps (consumption) | Runs the API and the worker | Both scale to zero. The API starts on an HTTP request, the worker when messages are waiting (KEDA Service Bus rule). |
-| Service Bus, Basic tier | Queue between the API and the worker | One queue with the same settings as the local emulator. Basic is enough: no topics, sessions or broker-side duplicate detection are used. |
-| PostgreSQL Flexible Server, B1ms | Payments and the processed-event log | Same major version as local. Reachable only from inside Azure. |
-| Key Vault | Connection strings and the signing secret | RBAC authorization, one role assignment per secret. |
-| Managed identities | Access to Key Vault and deployment | One per application, one for the pipeline. |
+| Container Apps (consumption profile) | Runs the API and the worker | Both scale to zero. The API starts on an HTTP request, the worker when messages are waiting (KEDA Service Bus rule). The environment is placed in the virtual network. |
+| Service Bus, Basic tier | Queue between the API and the worker | One queue with the same settings as the local emulator. Basic is enough: no topics, sessions or broker-side duplicate detection are used. Shared access keys are disabled. |
+| PostgreSQL Flexible Server, B1ms | Payments and the processed-event log | Same major version as local. In its own delegated subnet, with no public endpoint and password sign-in disabled. |
+| Virtual network + private DNS zone | Private path from the apps to the database | One subnet for Container Apps, one for PostgreSQL. |
+| Key Vault | The webhook signing secret | RBAC authorization, one role assignment on that one secret. |
+| Managed identities | Every sign-in in the system | One each for the API, the worker, the autoscaler and the pipeline. |
 | Application Insights + Log Analytics | Traces, metrics and logs | Fed by OpenTelemetry. |
+| Azure Monitor alerts | Email when something needs a person | Dead-lettered messages, queue backlog, API 5xx. |
 
 ### Security
 
-- **No secrets in the repository, the images or the pipeline.** The database password and the signing secret are generated by `infra/deploy.ps1` on the first run, stored in Key Vault and read back from there on later runs.
-- **Each application reads only its own secrets.** The API identity can read the send-only Service Bus key and the signing secret. It cannot read the database connection string.
-- **Service Bus keys are split by role.** The API key can only send, the worker key can only listen. A third key with the `Manage` right is used by the autoscaler alone, to read the queue length.
+- **No passwords or keys to steal.** The API and the worker sign in to Service Bus with their managed identities, and the worker signs in to PostgreSQL with a Microsoft Entra access token. Shared access keys on Service Bus and password sign-in on PostgreSQL are switched off, so those credentials do not exist.
+- **Least privilege per identity, on one queue.** The API identity can only send, the worker identity can only receive. Reading the queue length needs the owner role, so the autoscaler has a separate identity for that.
+- **The database is not on the internet.** It sits in a delegated subnet with public access disabled. Only the container apps in the same virtual network can reach it.
+- **One secret, tightly scoped.** The HMAC secret shared with the webhook provider is generated by `infra/deploy.ps1`, stored in Key Vault and readable only by the API identity.
 - **The worker has no ingress.** Only the API is reachable from the internet.
+- **No credentials in the repository, the images or the pipeline.**
 
 ### Deployment
 
@@ -213,9 +230,31 @@ The application map built from the same telemetry:
 
 ![Application map: API, worker and PostgreSQL](docs/images/application-map.png)
 
+### Operations
+
+Three Azure Monitor alerts email the operator, and each one answers a single question:
+
+| Alert | Question | Fires when |
+| --- | --- | --- |
+| `alert-webhook-dead-letters` | Did an event fail for good? | Any message is in the dead-letter queue |
+| `alert-webhook-queue-backlog` | Is the worker keeping up? | More than 100 messages wait for 15 minutes |
+| `alert-webhook-api-5xx` | Are we rejecting valid webhooks? | The API answers with any 5xx |
+
+Dead-lettered messages are handled with `tools/DeadLetterReplay`. It signs in as the current Azure CLI user, who needs the `Azure Service Bus Data Owner` role on the queue (the deploying user gets it from the template).
+
+```powershell
+# List what is in the dead-letter queue, with the reason for each message. Changes nothing.
+dotnet run --project tools/DeadLetterReplay -- --namespace <name>.servicebus.windows.net --dry-run
+
+# After the cause is fixed: move the messages back to the queue.
+dotnet run --project tools/DeadLetterReplay -- --namespace <name>.servicebus.windows.net
+```
+
+The tool sends a message before it removes it from the dead-letter queue, so an interrupted run can only produce a duplicate, and the worker already records duplicates without applying them twice.
+
 ### Cost
 
-An idle system costs close to nothing: both apps scale to zero, Service Bus Basic is billed per operation, and the B1ms database is covered by the Azure free offer for 12 months. Deleting the resource group removes everything:
+An idle system costs close to nothing: both apps scale to zero, Service Bus Basic is billed per operation, the virtual network is free, and the B1ms database is covered by the Azure free offer for 12 months. Deleting the resource group removes everything:
 
 ```
 az group delete -n rg-webhook-processor
@@ -227,7 +266,9 @@ az group delete -n rg-webhook-processor
 | --- | --- | --- |
 | Idempotency in the database, not in the broker | Works on the cheapest Service Bus tier and is covered by tests against real PostgreSQL | One extra insert per event |
 | Scale to zero | No cost while idle | The first request after idle waits a few seconds for a cold start. Webhook providers retry, so this is acceptable. |
-| Connection strings in Key Vault | No application code depends on Azure identity libraries | They are still shared keys. Passwordless access with managed identity to Service Bus and PostgreSQL is the next step. |
-| Database open to Azure-internal traffic | Container Apps on the consumption plan have no fixed outbound address | Any Azure tenant can reach the port, so TLS and the password are the protection. A private endpoint in a virtual network would close it, at extra cost. |
+| Managed identities instead of connection strings | Nothing to leak, rotate or store | The services depend on `Azure.Identity`, and local runs use a different sign-in path (connection strings to the emulator and a local database) than Azure does. |
+| Database in a private subnet (VNet integration) | No public endpoint, and it costs nothing extra | Nobody can connect from a laptop. Inspecting data needs a jump host or a temporary app inside the network, and the network mode cannot be changed without recreating the server. |
+| Worker identity is the database administrator | Nothing outside the network can run SQL to create a narrower role, so the identity is registered through Azure | The worker has more rights on the server than it needs for normal processing. The server hosts only this database, and the worker needs schema rights for migrations anyway. |
+| Service Bus keeps a public endpoint | Private endpoints need the Premium tier, far beyond this workload | The namespace is reachable from the internet, protected by Entra sign-in and role assignments only. |
 | Bicep | No state file and no extra tooling beyond the Azure CLI | Azure only |
 | Pipeline deploys images only | A compromised pipeline cannot read secrets or delete infrastructure | Infrastructure changes are a manual step |
