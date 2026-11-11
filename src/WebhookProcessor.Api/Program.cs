@@ -1,3 +1,4 @@
+using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -27,8 +28,6 @@ if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_
         options.Filter = context => !context.Request.Path.StartsWithSegments("/health"));
 }
 
-var serviceBus = builder.Configuration.GetConnectionString("ServiceBus")
-    ?? throw new InvalidOperationException("ConnectionStrings:ServiceBus is not configured.");
 var queueName = builder.Configuration["ServiceBus:QueueName"]
     ?? throw new InvalidOperationException("ServiceBus:QueueName is not configured.");
 var signingSecret = builder.Configuration["Webhook:SigningSecret"]
@@ -42,10 +41,22 @@ builder.Services.AddSingleton(new WebhookSettings(
     TimeSpan.FromSeconds(builder.Configuration.GetValue("Webhook:TimestampToleranceSeconds", 300))));
 
 // Fail fast when the broker is down, so the provider gets a 503 quickly instead of a hanging request.
-builder.Services.AddSingleton(new ServiceBusClient(serviceBus, new ServiceBusClientOptions
+var serviceBusOptions = new ServiceBusClientOptions
 {
     RetryOptions = new ServiceBusRetryOptions { MaxRetries = 1, TryTimeout = TimeSpan.FromSeconds(4) },
-}));
+};
+
+// On Azure the API signs in to Service Bus with its managed identity, so no key exists anywhere.
+// Without a namespace setting it falls back to a connection string, which is how the local
+// emulator and the tests are reached.
+var serviceBusNamespace = builder.Configuration["ServiceBus:FullyQualifiedNamespace"];
+builder.Services.AddSingleton(string.IsNullOrEmpty(serviceBusNamespace)
+    ? new ServiceBusClient(
+        builder.Configuration.GetConnectionString("ServiceBus")
+            ?? throw new InvalidOperationException(
+                "Configure ServiceBus:FullyQualifiedNamespace or ConnectionStrings:ServiceBus."),
+        serviceBusOptions)
+    : new ServiceBusClient(serviceBusNamespace, new DefaultAzureCredential(), serviceBusOptions));
 builder.Services.AddSingleton(services => services.GetRequiredService<ServiceBusClient>().CreateSender(queueName));
 
 builder.Services.AddHealthChecks()

@@ -1,3 +1,4 @@
+using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -34,11 +35,32 @@ if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_
 
 var postgres = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured.");
-var serviceBus = builder.Configuration.GetConnectionString("ServiceBus")
-    ?? throw new InvalidOperationException("ConnectionStrings:ServiceBus is not configured.");
 
-builder.Services.AddSingleton(NpgsqlDataSource.Create(postgres));
-builder.Services.AddSingleton(new ServiceBusClient(serviceBus));
+// On Azure the worker signs in to PostgreSQL and Service Bus with its managed identity, so no
+// password or key exists anywhere. Without these settings it uses the password in the connection
+// string and a Service Bus connection string, which is how local runs and the tests work.
+var postgresUsesIdentity = builder.Configuration.GetValue<bool>("Postgres:UseManagedIdentity");
+var serviceBusNamespace = builder.Configuration["ServiceBus:FullyQualifiedNamespace"];
+var azureCredential = new DefaultAzureCredential();
+
+var dataSourceBuilder = new NpgsqlDataSourceBuilder(postgres);
+if (postgresUsesIdentity)
+{
+    // The server accepts a Microsoft Entra access token in place of a password. Tokens expire,
+    // so the data source fetches a fresh one in the background well before that happens.
+    dataSourceBuilder.UsePeriodicPasswordProvider(
+        async (_, cancellationToken) => await PostgresAccessToken.GetAsync(azureCredential, cancellationToken),
+        successRefreshInterval: TimeSpan.FromMinutes(30),
+        failureRefreshInterval: TimeSpan.FromSeconds(10));
+}
+
+builder.Services.AddSingleton(dataSourceBuilder.Build());
+builder.Services.AddSingleton(string.IsNullOrEmpty(serviceBusNamespace)
+    ? new ServiceBusClient(
+        builder.Configuration.GetConnectionString("ServiceBus")
+            ?? throw new InvalidOperationException(
+                "Configure ServiceBus:FullyQualifiedNamespace or ConnectionStrings:ServiceBus."))
+    : new ServiceBusClient(serviceBusNamespace, azureCredential));
 builder.Services.AddSingleton<PaymentRepository>();
 builder.Services.AddSingleton<EventProcessor>();
 builder.Services.AddSingleton<QueueConsumer>();
@@ -52,7 +74,16 @@ var app = builder.Build();
 
 if (builder.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
 {
-    DatabaseMigrator.Migrate(postgres, app.Services.GetRequiredService<ILogger<Program>>());
+    // The migration tool takes a plain connection string, so with identity sign-in it gets one
+    // access token as the password. A token outlives the few seconds a migration takes.
+    var migrationConnectionString = postgresUsesIdentity
+        ? new NpgsqlConnectionStringBuilder(postgres)
+        {
+            Password = await PostgresAccessToken.GetAsync(azureCredential, CancellationToken.None),
+        }.ConnectionString
+        : postgres;
+
+    DatabaseMigrator.Migrate(migrationConnectionString, app.Services.GetRequiredService<ILogger<Program>>());
 }
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
