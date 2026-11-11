@@ -230,6 +230,8 @@ The application map built from the same telemetry:
 
 ![Application map: API, worker and PostgreSQL](docs/images/application-map.png)
 
+The `localhost:12356` node is the managed identity endpoint inside the container: the calls are the worker fetching access tokens for Service Bus and PostgreSQL, where a connection string with a password used to be.
+
 ### Operations
 
 Three Azure Monitor alerts email the operator, and each one answers a single question:
@@ -249,6 +251,10 @@ dotnet run --project tools/DeadLetterReplay -- --namespace <name>.servicebus.win
 # After the cause is fixed: move the messages back to the queue.
 dotnet run --project tools/DeadLetterReplay -- --namespace <name>.servicebus.windows.net
 ```
+
+The dead-letter alert as deployed: it watches the queue, fires when `DeadletteredMessages` is above zero and emails the operator group. In a test, a message placed in the dead-letter queue raised the alert about four minutes later, and the alert resolved by itself once the message had been replayed.
+
+![Dead-letter alert: scope, action group and condition](docs/images/alert.png)
 
 The tool sends a message before it removes it from the dead-letter queue, so an interrupted run can only produce a duplicate, and the worker already records duplicates without applying them twice.
 
