@@ -8,8 +8,8 @@ param location string
 param tags object
 param queueName string
 
-// Namespace names are global across Azure, so a stable hash of the resource group id is appended.
-var namespaceName = 'sb-webhook-${uniqueString(resourceGroup().id)}'
+// Namespace names are global across Azure, so a stable hash of the resource group id and region is appended.
+var namespaceName = 'sb-webhook-${uniqueString(resourceGroup().id, location)}'
 
 resource namespace 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
   name: namespaceName
