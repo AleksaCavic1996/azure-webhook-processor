@@ -4,6 +4,9 @@
     <Project Path="src/WebhookProcessor.Core/WebhookProcessor.Core.csproj" />
     <Project Path="src/WebhookProcessor.Worker/WebhookProcessor.Worker.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/DeadLetterReplay/DeadLetterReplay.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WebhookProcessor.Tests/WebhookProcessor.Tests.csproj" />
   </Folder>
