@@ -27,6 +27,9 @@ param serviceBusListenSecretUri string
 param serviceBusScalerSecretUri string
 param postgresConnectionSecretUri string
 
+@description('Principal id of the identity GitHub Actions deploys with.')
+param deployPrincipalId string
+
 var suffix = uniqueString(resourceGroup().id, location)
 
 // Container logs (the JSON console output of both apps) land here. First 5 GB a month are free.
@@ -268,6 +271,62 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
         ]
       }
     }
+  }
+}
+
+// ---- What the deployment pipeline may do ------------------------------------------------------
+// Only this: change the two container apps (new image) and keep their identities attached.
+// It cannot touch the database, Service Bus, Key Vault or role assignments.
+
+var contributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+var identityOperatorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f1a07417-d97a-45cb-824c-7a7467783830')
+
+resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: last(split(apiIdentityId, '/'))
+}
+
+resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: last(split(workerIdentityId, '/'))
+}
+
+resource deployChangesApi 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: api
+  name: guid(api.id, deployPrincipalId, contributorRoleId)
+  properties: {
+    principalId: deployPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: contributorRoleId
+  }
+}
+
+resource deployChangesWorker 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: worker
+  name: guid(worker.id, deployPrincipalId, contributorRoleId)
+  properties: {
+    principalId: deployPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: contributorRoleId
+  }
+}
+
+// Updating an app that has a user-assigned identity requires permission to assign that identity.
+resource deployKeepsApiIdentity 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: apiIdentity
+  name: guid(apiIdentity.id, deployPrincipalId, identityOperatorRoleId)
+  properties: {
+    principalId: deployPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: identityOperatorRoleId
+  }
+}
+
+resource deployKeepsWorkerIdentity 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: workerIdentity
+  name: guid(workerIdentity.id, deployPrincipalId, identityOperatorRoleId)
+  properties: {
+    principalId: deployPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: identityOperatorRoleId
   }
 }
 

@@ -141,3 +141,63 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # Rolls the images that were just published out to Azure Container Apps.
+  # Sign-in is OIDC: GitHub presents a short-lived token and Azure accepts it only for this
+  # repository's main branch. No password or key is stored in GitHub.
+  # The identity may only update the two container apps; infrastructure is deployed
+  # separately with infra/deploy.ps1.
+  deploy:
+    name: Deploy to Azure Container Apps
+    needs: publish-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RESOURCE_GROUP: rg-webhook-processor
+    steps:
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The tag is the commit SHA, so what runs in Azure can be traced to one commit.
+      - name: Update the API and the worker to this commit's images
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/webhook-processor"
+          for app in api worker; do
+            az containerapp update \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "ca-webhook-$app" \
+              --image "$repository-$app:sha-$GITHUB_SHA" \
+              --query "properties.latestRevisionName" --output tsv
+          done
+
+      - name: Wait until the new API revision answers its readiness check
+        run: |
+          fqdn=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name ca-webhook-api \
+            --query properties.configuration.ingress.fqdn --output tsv)
+          for attempt in $(seq 1 20); do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 "https://$fqdn/health/ready" || true)
+            echo "attempt $attempt: /health/ready -> $status"
+            if [ "$status" = "200" ]; then exit 0; fi
+            sleep 10
+          done
+          echo "The API did not become ready." >&2
+          exit 1
+
+      - name: Check that both apps run this commit's image
+        run: |
+          for app in api worker; do
+            image=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "ca-webhook-$app" \
+              --query "properties.template.containers[0].image" --output tsv)
+            echo "$app: $image"
+            case "$image" in
+              *":sha-$GITHUB_SHA") ;;
+              *) echo "ca-webhook-$app does not run sha-$GITHUB_SHA" >&2; exit 1 ;;
+            esac
+          done

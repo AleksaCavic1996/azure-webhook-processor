@@ -27,6 +27,9 @@ param webhookSigningSecret string
 @description('Image tag for the API and the worker, for example sha-<commit>. CI publishes one per commit on main.')
 param imageTag string
 
+@description('GitHub repository (owner/name) whose main branch may deploy new images through OIDC.')
+param githubRepository string = 'AleksaCavic1996/azure-webhook-processor'
+
 @description('Object id of the deploying user. Gets access to Key Vault secrets. Empty = no assignment.')
 param deployerPrincipalId string = ''
 
@@ -69,6 +72,7 @@ module identities 'modules/identities.bicep' = {
   params: {
     location: location
     tags: tags
+    githubRepository: githubRepository
   }
 }
 
@@ -108,6 +112,7 @@ module apps 'modules/apps.bicep' = {
     serviceBusListenSecretUri: keyVault.outputs.serviceBusListenSecretUri
     serviceBusScalerSecretUri: keyVault.outputs.serviceBusScalerSecretUri
     postgresConnectionSecretUri: keyVault.outputs.postgresConnectionSecretUri
+    deployPrincipalId: identities.outputs.deployPrincipalId
   }
 }
 
@@ -120,3 +125,6 @@ output keyVaultName string = keyVault.outputs.vaultName
 output apiUrl string = apps.outputs.apiUrl
 output logWorkspaceName string = apps.outputs.logWorkspaceName
 output imageTag string = imageTag
+output deployClientId string = identities.outputs.deployClientId
+output tenantId string = tenant().tenantId
+output subscriptionId string = subscription().subscriptionId
