@@ -189,6 +189,8 @@ az login
 
 The pipeline identity may change the two container apps and nothing else. It cannot reach the database, Service Bus, Key Vault or role assignments.
 
+![GitHub Actions run with tests, image publishing and the deployment to Azure](docs/images/pipeline.png)
+
 Send a signed test event to the deployed API:
 
 ```powershell
@@ -200,6 +202,16 @@ Send a signed test event to the deployed API:
 Both services export traces, metrics and logs through OpenTelemetry to Application Insights. Export is on only where `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, so local runs and tests send nothing.
 
 The Service Bus client carries the trace context inside the message, so one event is one trace: the HTTP request, the send to the queue, the processing in the worker, each SQL command and the message completion. Log lines from both services carry the same trace id. Health probe requests are filtered out.
+
+One event in Application Insights, from the HTTP request to the database:
+
+![End-to-end trace of one webhook event](docs/images/trace.png)
+
+The API answers `202` and sends the message, the worker processes it with two SQL commands (record the event, update the payment) and completes the message. The long bar is not processing time: it is the worker's receive call, which had been waiting on the empty queue for 37 seconds when this message arrived.
+
+The application map built from the same telemetry:
+
+![Application map: API, worker and PostgreSQL](docs/images/application-map.png)
 
 ### Cost
 
