@@ -27,8 +27,11 @@ param webhookSigningSecret string
 @description('Image tag for the API and the worker, for example sha-<commit>. CI publishes one per commit on main.')
 param imageTag string
 
-@description('GitHub repository (owner/name) whose main branch may deploy new images through OIDC.')
-param githubRepository string = 'AleksaCavic1996/azure-webhook-processor'
+// GitHub issues tokens with an immutable subject: names plus numeric owner and repository ids.
+// The ids keep the trust bound to this exact repository even if a name is later reused.
+// Read it with: gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+@description('Subject prefix of the GitHub OIDC token for the repository whose main branch may deploy.')
+param githubSubjectPrefix string = 'repo:AleksaCavic1996@95768451/azure-webhook-processor@1447541587'
 
 @description('Object id of the deploying user. Gets access to Key Vault secrets. Empty = no assignment.')
 param deployerPrincipalId string = ''
@@ -72,7 +75,7 @@ module identities 'modules/identities.bicep' = {
   params: {
     location: location
     tags: tags
-    githubRepository: githubRepository
+    githubSubjectPrefix: githubSubjectPrefix
   }
 }
 

@@ -26,8 +26,8 @@ output workerPrincipalId string = workerIdentity.properties.principalId
 
 // ---- Deployment from GitHub Actions --------------------------------------------------------
 
-@description('GitHub repository in owner/name form whose main branch may deploy.')
-param githubRepository string
+@description('Subject prefix of the GitHub OIDC token for the repository whose main branch may deploy.')
+param githubSubjectPrefix string
 
 // GitHub Actions signs in as this identity with a short-lived OIDC token. There is no client
 // secret: Azure trusts a token only if GitHub issued it for this repository and this branch.
@@ -40,7 +40,7 @@ resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
     name: 'github-main'
     properties: {
       issuer: 'https://token.actions.githubusercontent.com'
-      subject: 'repo:${githubRepository}:ref:refs/heads/main'
+      subject: '${githubSubjectPrefix}:ref:refs/heads/main'
       audiences: ['api://AzureADTokenExchange']
     }
   }
