@@ -5,6 +5,9 @@
 #
 # Against the API container (docker compose --profile app), signed with the secret from .env:
 #   ./scripts/send-test-event.ps1 -EventId evt-1 -PaymentId pay-1 -FromEnvFile
+#
+# Against the API on Azure, signed with the secret from Key Vault:
+#   ./scripts/send-test-event.ps1 -EventId evt-1 -PaymentId pay-1 -KeyVaultName <vault> -Url https://<api>/webhooks/payments
 
 param(
     [Parameter(Mandatory)] [string] $EventId,
@@ -17,12 +20,19 @@ param(
     # Overrides the signature, to test rejection.
     [string] $Signature,
     # Sign with WEBHOOK_SIGNING_SECRET from .env and default to the container port 8080.
-    [switch] $FromEnvFile
+    [switch] $FromEnvFile,
+    # Sign with webhook-signing-secret from this Azure Key Vault (needs az login). Requires -Url.
+    [string] $KeyVaultName
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($FromEnvFile) {
+if ($KeyVaultName) {
+    if (-not $Url) { throw "-Url is required with -KeyVaultName." }
+    $secret = az keyvault secret show --vault-name $KeyVaultName --name webhook-signing-secret --query value -o tsv
+    if (-not $secret) { throw "webhook-signing-secret could not be read from $KeyVaultName." }
+}
+elseif ($FromEnvFile) {
     $envFile = Join-Path $PSScriptRoot '..\.env'
     $secretLine = Get-Content $envFile | Where-Object { $_ -like 'WEBHOOK_SIGNING_SECRET=*' }
     if (-not $secretLine) { throw 'WEBHOOK_SIGNING_SECRET is not set in .env.' }

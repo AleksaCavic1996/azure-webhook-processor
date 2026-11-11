@@ -36,5 +36,36 @@ resource queue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
   }
 }
 
+// One key per role, each with the least it needs. The API can only send and the worker can
+// only receive, so a leaked API key cannot read payments off the queue.
+resource apiSendRule 'Microsoft.ServiceBus/namespaces/queues/authorizationRules@2024-01-01' = {
+  parent: queue
+  name: 'api-send'
+  properties: {
+    rights: ['Send']
+  }
+}
+
+resource workerListenRule 'Microsoft.ServiceBus/namespaces/queues/authorizationRules@2024-01-01' = {
+  parent: queue
+  name: 'worker-listen'
+  properties: {
+    rights: ['Listen']
+  }
+}
+
+// The autoscaler reads the queue length, which requires the Manage right (and Manage
+// requires the other two). It is used by the platform only, never by application code.
+resource scalerRule 'Microsoft.ServiceBus/namespaces/authorizationRules@2024-01-01' = {
+  parent: namespace
+  name: 'keda-scaler'
+  properties: {
+    rights: ['Manage', 'Listen', 'Send']
+  }
+}
+
 output namespaceName string = namespace.name
 output endpoint string = 'https://${namespace.name}.servicebus.windows.net'
+output apiSendRuleName string = apiSendRule.name
+output workerListenRuleName string = workerListenRule.name
+output scalerRuleName string = scalerRule.name
