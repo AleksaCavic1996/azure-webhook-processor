@@ -1,8 +1,9 @@
 # Deploys the whole infrastructure from infra/main.bicep.
 #
-# Secrets (PostgreSQL password, webhook signing secret) are never typed or printed:
-#   - first run: random values are generated and stored in Key Vault by the template
-#   - later runs: the existing values are read back from Key Vault and reused
+# The system has one secret, the webhook signing secret, and it is never typed or printed:
+#   - first run: a random value is generated and stored in Key Vault by the template
+#   - later runs: the existing value is read back from Key Vault and reused
+# Service Bus and PostgreSQL have no passwords or keys; they are reached with managed identities.
 #
 # Usage (from the repository root, after `az login`):
 #   ./infra/deploy.ps1                      deploy the images of the latest commit on origin/main
@@ -12,6 +13,8 @@ param(
     [string]$Location = 'northeurope',
     [string]$ResourceGroupName = 'rg-webhook-processor',
     [string]$ImageTag,
+    # Receives alert emails. Defaults to the signed-in account, so no address is kept in the repository.
+    [string]$AlertEmail,
     [switch]$WhatIf
 )
 
@@ -19,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $template = Join-Path $PSScriptRoot 'main.bicep'
 
 function New-RandomSecret {
-    # 40 letters and digits: no characters that need escaping in a connection string.
+    # 40 letters and digits: no characters that need escaping.
     $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'.ToCharArray()
     $bytes = New-Object byte[] 40
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -36,6 +39,8 @@ function Get-VaultSecret([string]$Vault, [string]$Name) {
 $deployerId = az ad signed-in-user show --query id -o tsv
 if (-not $deployerId) { throw 'Not logged in. Run az login first.' }
 
+if (-not $AlertEmail) { $AlertEmail = az account show --query user.name -o tsv }
+
 if (-not $ImageTag) {
     # CI publishes an image tagged with the full commit SHA for every commit on main.
     $sha = git -C $PSScriptRoot rev-parse origin/main
@@ -44,24 +49,17 @@ if (-not $ImageTag) {
 }
 Write-Host "Image tag: $ImageTag"
 
-# Reuse the secrets of an existing deployment, if there is one.
-$password = $null
+# Reuse the signing secret of an existing deployment, if there is one.
 $signingSecret = $null
 $vaultName = az keyvault list --resource-group $ResourceGroupName --query "[0].name" -o tsv 2>$null
 if ($vaultName) {
-    $password = Get-VaultSecret $vaultName 'postgres-admin-password'
-    if (-not $password) {
-        throw "Key Vault $vaultName exists, but postgres-admin-password could not be read. Refusing to rotate the password silently."
-    }
-    Write-Host "Reusing the PostgreSQL password stored in $vaultName."
     $signingSecret = Get-VaultSecret $vaultName 'webhook-signing-secret'
-    if ($signingSecret) { Write-Host "Reusing the webhook signing secret stored in $vaultName." }
+    if (-not $signingSecret) {
+        throw "Key Vault $vaultName exists, but webhook-signing-secret could not be read. Refusing to rotate it silently."
+    }
+    Write-Host "Reusing the webhook signing secret stored in $vaultName."
 }
-if (-not $password) {
-    $password = New-RandomSecret
-    Write-Host 'Generated a new PostgreSQL password.'
-}
-if (-not $signingSecret) {
+else {
     $signingSecret = New-RandomSecret
     Write-Host 'Generated a new webhook signing secret.'
 }
@@ -72,7 +70,7 @@ az deployment sub $operation `
     --location $Location `
     --template-file $template `
     --parameters location=$Location resourceGroupName=$ResourceGroupName imageTag=$ImageTag `
-                 deployerPrincipalId=$deployerId `
-                 postgresAdministratorPassword=$password webhookSigningSecret=$signingSecret `
+                 deployerPrincipalId=$deployerId alertEmail=$AlertEmail `
+                 webhookSigningSecret=$signingSecret `
     --query properties.outputs
 if ($LASTEXITCODE -ne 0) { throw 'Deployment failed.' }

@@ -2,17 +2,23 @@
 //
 // Burstable B1ms with 32 GB is the size covered by the Azure free offer (750 hours a month
 // for 12 months), and it is plenty for this workload.
+//
+// Two things make it closed by default:
+//   - no public endpoint: the server sits in a delegated subnet of the private network
+//   - no passwords: only Microsoft Entra sign-in is enabled, so there is no password to leak
 
 param location string
 param tags object
 
-@description('Administrator login. The worker connects with it; the schema is created by its migrations.')
-param administratorLogin string
-
-@secure()
-param administratorPassword string
-
 param databaseName string
+
+@description('Subnet delegated to PostgreSQL and the private DNS zone that resolves the server name.')
+param subnetId string
+param privateDnsZoneId string
+
+@description('Managed identity of the worker. It signs in with an access token and owns the schema.')
+param workerPrincipalId string
+param workerIdentityName string
 
 var serverName = 'psql-webhook-${uniqueString(resourceGroup().id, location)}'
 
@@ -27,8 +33,11 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   properties: {
     // Same major version as the local docker-compose database.
     version: '18'
-    administratorLogin: administratorLogin
-    administratorLoginPassword: administratorPassword
+    authConfig: {
+      activeDirectoryAuth: 'Enabled'
+      passwordAuth: 'Disabled'
+      tenantId: subscription().tenantId
+    }
     storage: {
       storageSizeGB: 32
       autoGrow: 'Disabled'
@@ -41,7 +50,9 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       mode: 'Disabled'
     }
     network: {
-      publicNetworkAccess: 'Enabled'
+      delegatedSubnetResourceId: subnetId
+      privateDnsZoneArmResourceId: privateDnsZoneId
+      publicNetworkAccess: 'Disabled'
     }
   }
 }
@@ -55,17 +66,20 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-0
   }
 }
 
-// The special 0.0.0.0 rule admits traffic that originates inside Azure, which is how
-// Container Apps on the consumption plan reach the server (they have no fixed outbound IP).
-// Trade-off: any Azure tenant can reach the port, so the password and TLS are the real
-// protection. A private endpoint in a VNet would close this, at extra cost.
-resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+// The worker's identity is registered as the server's Microsoft Entra administrator. That is
+// done here, through Azure, because nothing outside the private network can connect to run SQL.
+// Trade-off: the worker has administrator rights on this server. The server hosts only this
+// application's database, and the worker already needs schema rights to apply migrations.
+resource workerAdministrator 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = {
   parent: server
-  name: 'AllowAllAzureServicesAndResourcesWithinAzureIps'
+  name: workerPrincipalId
   properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
+    principalType: 'ServicePrincipal'
+    principalName: workerIdentityName
+    tenantId: subscription().tenantId
   }
+  // The server accepts one management operation at a time.
+  dependsOn: [database]
 }
 
 output serverName string = server.name

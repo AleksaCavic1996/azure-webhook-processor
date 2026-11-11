@@ -1,11 +1,14 @@
-// One user-assigned managed identity per application. The container apps use them to read
-// their secrets from Key Vault, so no credential for the vault is stored anywhere.
+// User-assigned managed identities. Every sign-in in the system goes through one of these:
+// to Service Bus, to PostgreSQL, to Key Vault and from the deployment pipeline to Azure.
 //
-// User-assigned (not system-assigned) so that the identities exist, and have their Key Vault
-// roles, before the container apps that depend on them are created.
+// User-assigned (not system-assigned) so that the identities exist, and have their roles,
+// before the container apps that depend on them are created.
 
 param location string
 param tags object
+
+@description('Subject prefix of the GitHub OIDC token for the repository whose main branch may deploy.')
+param githubSubjectPrefix string
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-webhook-api'
@@ -19,15 +22,12 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   tags: tags
 }
 
-output apiIdentityId string = apiIdentity.id
-output apiPrincipalId string = apiIdentity.properties.principalId
-output workerIdentityId string = workerIdentity.id
-output workerPrincipalId string = workerIdentity.properties.principalId
-
-// ---- Deployment from GitHub Actions --------------------------------------------------------
-
-@description('Subject prefix of the GitHub OIDC token for the repository whose main branch may deploy.')
-param githubSubjectPrefix string
+// Used only by the worker's scale rule, to read the queue length.
+resource scalerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-webhook-scaler'
+  location: location
+  tags: tags
+}
 
 // GitHub Actions signs in as this identity with a short-lived OIDC token. There is no client
 // secret: Azure trusts a token only if GitHub issued it for this repository and this branch.
@@ -45,6 +45,18 @@ resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
     }
   }
 }
+
+output apiIdentityId string = apiIdentity.id
+output apiPrincipalId string = apiIdentity.properties.principalId
+output apiClientId string = apiIdentity.properties.clientId
+
+output workerIdentityId string = workerIdentity.id
+output workerIdentityName string = workerIdentity.name
+output workerPrincipalId string = workerIdentity.properties.principalId
+output workerClientId string = workerIdentity.properties.clientId
+
+output scalerIdentityId string = scalerIdentity.id
+output scalerPrincipalId string = scalerIdentity.properties.principalId
 
 output deployClientId string = deployIdentity.properties.clientId
 output deployPrincipalId string = deployIdentity.properties.principalId
