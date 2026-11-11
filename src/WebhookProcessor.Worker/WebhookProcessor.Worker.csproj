@@ -9,9 +9,11 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
     <PackageReference Include="Dapper" Version="2.1.89" />
     <PackageReference Include="dbup-postgresql" Version="7.0.1" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Npgsql.OpenTelemetry" Version="10.0.3" />
   </ItemGroup>
 
   <ItemGroup>

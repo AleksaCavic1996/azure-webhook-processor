@@ -127,6 +127,7 @@ output postgresHost string = postgres.outputs.host
 output keyVaultName string = keyVault.outputs.vaultName
 output apiUrl string = apps.outputs.apiUrl
 output logWorkspaceName string = apps.outputs.logWorkspaceName
+output applicationInsightsName string = apps.outputs.applicationInsightsName
 output imageTag string = imageTag
 output deployClientId string = identities.outputs.deployClientId
 output tenantId string = tenant().tenantId

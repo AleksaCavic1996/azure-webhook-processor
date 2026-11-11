@@ -1,5 +1,7 @@
 using Azure.Messaging.ServiceBus;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using OpenTelemetry.Instrumentation.AspNetCore;
 using WebhookProcessor.Api;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +13,19 @@ builder.Logging.AddJsonConsole(options =>
     options.UseUtcTimestamp = true;
     options.TimestampFormat = "O";
 });
+
+// Traces, metrics and logs go to Application Insights through OpenTelemetry, but only where a
+// connection string is configured (Azure). Locally and in tests nothing is collected or sent.
+if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    // Lets the Service Bus client emit spans, so a trace continues from the API into the worker.
+    AppContext.SetSwitch("Azure.Experimental.EnableActivitySource", true);
+    builder.Services.AddOpenTelemetry().UseAzureMonitor();
+
+    // Health probes arrive every 30 seconds and would bury the real requests.
+    builder.Services.Configure<AspNetCoreTraceInstrumentationOptions>(options =>
+        options.Filter = context => !context.Request.Path.StartsWithSegments("/health"));
+}
 
 var serviceBus = builder.Configuration.GetConnectionString("ServiceBus")
     ?? throw new InvalidOperationException("ConnectionStrings:ServiceBus is not configured.");

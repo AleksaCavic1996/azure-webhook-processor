@@ -45,6 +45,19 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+// Application Insights on top of the same workspace: traces, metrics and logs that both apps
+// export through OpenTelemetry. Shares the free 5 GB a month with the container logs.
+resource insights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-webhook-${suffix}'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
+  }
+}
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: 'cae-webhook-${suffix}'
   location: location
@@ -114,6 +127,16 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ServiceBus__QueueName'
               value: queueName
+            }
+            {
+              // Turns telemetry export on. The value identifies the resource; it grants no read access.
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: insights.properties.ConnectionString
+            }
+            {
+              // Name under which this service appears in traces and on the application map.
+              name: 'OTEL_SERVICE_NAME'
+              value: 'webhook-api'
             }
             {
               // Health probes run every 30 seconds; without this each one writes several log lines.
@@ -214,6 +237,16 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ServiceBus__QueueName'
               value: queueName
+            }
+            {
+              // Turns telemetry export on. The value identifies the resource; it grants no read access.
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: insights.properties.ConnectionString
+            }
+            {
+              // Name under which this service appears in traces and on the application map.
+              name: 'OTEL_SERVICE_NAME'
+              value: 'webhook-worker'
             }
             {
               // Health probes run every 30 seconds; without this each one writes several log lines.
@@ -332,3 +365,4 @@ resource deployKeepsWorkerIdentity 'Microsoft.Authorization/roleAssignments@2022
 
 output apiUrl string = 'https://${api.properties.configuration.ingress.fqdn}'
 output logWorkspaceName string = logs.name
+output applicationInsightsName string = insights.name
