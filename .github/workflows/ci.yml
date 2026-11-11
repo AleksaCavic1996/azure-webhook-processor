@@ -90,11 +90,24 @@ jobs:
           path: TestResults/*.trx
           if-no-files-found: ignore
 
+  # Compiles the Bicep templates, so a broken template fails a pull request instead of a deployment.
+  infrastructure:
+    name: Validate Bicep templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build infra/main.bicep with warnings as errors
+        run: |
+          az bicep build --file infra/main.bicep --stdout > /dev/null 2> bicep.log || { cat bicep.log; exit 1; }
+          if grep -q -i "warning" bicep.log; then cat bicep.log; exit 1; fi
+
   # Images are built on every run, so a broken Dockerfile fails a pull request.
   # They are pushed only from main, and only after every test passed.
   publish-images:
     name: Build ${{ matrix.app }} image, publish to GHCR from main
-    needs: [build-and-test, end-to-end]
+    needs: [build-and-test, end-to-end, infrastructure]
     runs-on: ubuntu-latest
     env:
       PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
