@@ -134,11 +134,6 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               value: insights.properties.ConnectionString
             }
             {
-              // Name under which this service appears in traces and on the application map.
-              name: 'OTEL_SERVICE_NAME'
-              value: 'webhook-api'
-            }
-            {
               // Health probes run every 30 seconds; without this each one writes several log lines.
               name: 'Logging__LogLevel__Microsoft.AspNetCore'
               value: 'Warning'
@@ -242,11 +237,6 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               // Turns telemetry export on. The value identifies the resource; it grants no read access.
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: insights.properties.ConnectionString
-            }
-            {
-              // Name under which this service appears in traces and on the application map.
-              name: 'OTEL_SERVICE_NAME'
-              value: 'webhook-worker'
             }
             {
               // Health probes run every 30 seconds; without this each one writes several log lines.
