@@ -12,6 +12,7 @@ namespace WebhookProcessor.Tests.EndToEnd;
 /// tagged so a quick local run can skip them: dotnet test -- --filter-not-trait "Category=EndToEnd"
 /// </summary>
 [Trait("Category", "EndToEnd")]
+[Collection(PostgresCollection.Name)]
 public sealed class PipelineTests(PipelineFixture pipeline) : IClassFixture<PipelineFixture>
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);

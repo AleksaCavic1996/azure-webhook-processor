@@ -8,6 +8,7 @@ namespace WebhookProcessor.Tests.Integration;
 /// The idempotency guarantees, checked against a real PostgreSQL. A fake database could not prove
 /// these, because they rely on the primary key, ON CONFLICT and row locking.
 /// </summary>
+[Collection(PostgresCollection.Name)]
 public sealed class PaymentRepositoryTests(PostgresFixture db)
 {
     private readonly PaymentRepository _repository = new(db.DataSource);

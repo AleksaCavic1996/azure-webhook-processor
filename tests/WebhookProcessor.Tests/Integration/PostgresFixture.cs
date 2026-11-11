@@ -2,15 +2,22 @@ using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Testcontainers.PostgreSql;
-using WebhookProcessor.Tests.Integration;
 using WebhookProcessor.Worker;
-
-[assembly: AssemblyFixture(typeof(PostgresFixture))]
 
 namespace WebhookProcessor.Tests.Integration;
 
 /// <summary>
-/// One throwaway PostgreSQL container for the whole test run, with the real migrations applied.
+/// Test classes that need the database join this collection. The container starts only when one of
+/// them runs, so the unit and API tests work on a machine without Docker.
+/// </summary>
+[CollectionDefinition(Name)]
+public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
+{
+    public const string Name = "postgres";
+}
+
+/// <summary>
+/// One throwaway PostgreSQL container for all tests that use the database, with the real migrations applied.
 /// Tests share it safely because every test uses its own fresh event and payment ids.
 /// The image matches docker-compose.yml, so tests run against the same version as local development.
 /// </summary>
